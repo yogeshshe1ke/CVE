@@ -1,5 +1,5 @@
 # Source References for Published CVE & Advisory 
-1. **CVE-2019-7690** 
+- [x] **CVE-2019-7690** 
    - Description: In MobaTek MobaXterm Personal Edition v11.1 Build 3860, the SSH private key and its password can be retrieved from process memory for the lifetime of the process, even after the user disconnects from the remote SSH server. This affects Passwordless Authentication that has a Password Protected SSH Private Key.
    - Source: [NVD], [MITRE], [CVE_DETAILS]
 
